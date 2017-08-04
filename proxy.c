@@ -534,11 +534,11 @@ void *webTalk(void *args) {
 		shutdown(serverfd, 1);
 		debug_print("Transferred.");
     }
-    else {
-    	if (strcmp(httpMethod, "CONNECT") == 0) { 
-		
-		       /* CONNECT是代理协议 */
-			
+    else 
+	{
+    	if (strcmp(httpMethod, "CONNECT") == 0) 
+		{
+			// CONNECT表示走的代理
 			/* need to parse this request */
 			char * requestServer = strtok_r(NULL, " ", &strtokState);
 
