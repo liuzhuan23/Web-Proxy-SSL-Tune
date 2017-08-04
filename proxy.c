@@ -212,13 +212,13 @@ EVP_PKEY * createRootKey()
 	return rootkey;
 }
 
-/* [liuzhuan] Get Peer 签发证书, server_x509	真正的服务器证书（SSL链接时获取） */
+/* [liuzhuan] Get Peer 签发证书, server_x509 真正的服务器证书（SSL链接时获取） */
 X509 * createFakeCertificate(SSL * sslToServer, EVP_PKEY * serverkey, EVP_PKEY * rootkey)
 {
     unsigned char buffer[128] = { 0 };
 	int length = 0;
 
-    /* [liuzhuan] ** watch this line */
+    /* [liuzhuan] ** watch this line, 这里拿到的是真正的对端服务器证书, 把这个证书作为自己的证书给浏览器,起一个劫持的作用 */
 	X509 * server_x509 = SSL_get_peer_certificate(sslToServer);
 
 	if (server_x509 == NULL) 
@@ -535,7 +535,10 @@ void *webTalk(void *args) {
 		debug_print("Transferred.");
     }
     else {
-    	if (strcmp(httpMethod, "CONNECT") == 0) {
+    	if (strcmp(httpMethod, "CONNECT") == 0) { 
+		
+		       /* CONNECT是代理协议 */
+			
 			/* need to parse this request */
 			char * requestServer = strtok_r(NULL, " ", &strtokState);
 
@@ -607,6 +610,7 @@ void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int ser
 
     /* let the client know we've connected to the server */
     //sprintf(buf1, "%s 200 OK\r\n\r\n", version);
+	/* 回复客户端代理协议 200, 表示ok */
     sprintf(buf1, "%s 200 Connection Established\r\n\r\n", version);
     Rio_writen(clientfd, buf1, strlen(buf1));
 
