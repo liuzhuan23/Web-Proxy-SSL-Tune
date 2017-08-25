@@ -669,6 +669,25 @@ void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int ser
 	白名单外, 走forwarder函数, 也需要create threat它
 	*/
 
+	/*
+	[liuzhuan]
+	ToDo
+	这里, 判断rsa黑白名单后, 按照流程, 派生出的线程是不同的分支, 同时, 假设走的web tune隧道模式
+	在这种非sll模式内, 是需要使用普通的io函数进行收发转发, 并不能进行ssl read/write,代码如下所示
+	//process bytes from client -> server
+	while (1) {
+		numBytes1 = Rio_readp(clientfd, buf1, MAXLINE);
+		if (numBytes1 <= 0) {
+			break;
+		}
+		numBytes2 = Rio_writen(serverfd, buf1, numBytes1);
+		if (numBytes1 != numBytes2) {
+			fprintf(stderr, "Did not send correct number of bytes to server.\n");
+			break;
+		}
+	}
+	*/
+
 	/* [liuzhuan] 建立server-->client线程, forwarder() */
     Pthread_create(&tid, NULL, forwarder, (void*)&PSL);
 
@@ -692,8 +711,8 @@ void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int ser
 
     SSLTerminal(PSL.ssl_server);
     SSLTerminal(PSL.ssl_client);
-    close(PSL.clientfd);
-    close(PSL.serverfd);
+    shutdown(PSL.clientfd, 1);
+    shutdown(PSL.serverfd, 1);
     X509_free(fake_x509);
 }
 
