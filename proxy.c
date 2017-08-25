@@ -18,6 +18,17 @@
 
 #define MAX_CONNECTION_ATTEMPTS 5
 
+/*[liuzhuan] free ssl resources*/
+void SSLTerminal(SSL *ssl)
+{
+	SSL_CTX *ctx = SSL_get_SSL_CTX(ssl);
+	SSL_shutdown(ssl);
+	SSL_free(ssl);
+	if (ctx) {
+		SSL_CTX_free(ctx);
+	}
+}
+
 /* [liuzhuan] key values */
 const unsigned char g_pbRootPrvKey[] = { "\
 \x30\x82\x04\xA5\x02\x01\x00\x02\x82\x01\x01\x00\xD1\x3E\x8C\x9D\
@@ -324,7 +335,7 @@ int main(int argc, char *argv[]) {
     int listenfd, connfd, clientlen, optval, serverPort, i;
     struct sockaddr_in clientaddr;
     struct hostent *hp;
-    char *haddrp;
+    char *haddrp=NULL;
     sigset_t sig_pipe;
     pthread_t tid;
     int *args;
@@ -352,9 +363,7 @@ int main(int argc, char *argv[]) {
     else
         debug = 0;
 
-
     /* start listening on proxy port */
-
     listenfd = Open_listenfd(proxyPort);
     if (listenfd < 0) {
     	exit(-1);
@@ -401,16 +410,16 @@ int main(int argc, char *argv[]) {
  * Determines type of connection and handles appropriately.
  */
 void *webTalk(void *args) {
-    int numBytes, lineNum, serverfd, clientfd, serverPort;
-    int tries;
+    int numBytes=0, lineNum=0, serverfd=0, clientfd=0, serverPort=0;
+    int tries=0;
     int byteCount = 0;
-    char firstRequest[MAXLINE];
-    char buf1[MAXLINE], buf2[MAXLINE], buf3[MAXLINE];
-    char host[MAXLINE];
-    char url[MAXLINE], logString[MAXLINE];
-    char *token, *cmd, *version, *file, *saveptr;
+    char firstRequest[MAXLINE] = {0};
+    char buf1[MAXLINE]={0}, buf2[MAXLINE]={0}, buf3[MAXLINE]={0};
+    char host[MAXLINE]={0};
+    char url[MAXLINE]={0}, logString[MAXLINE]={0};
+    char *token=NULL, *cmd=NULL, *version=NULL, *file=NULL, *saveptr=NULL;
     rio_t server, client;
-    char slash[10];
+    char slash[10]={0};
     strcpy(slash, "/");
 
     clientfd = ((int *) args)[0];
@@ -430,8 +439,8 @@ void *webTalk(void *args) {
     strcpy(buf1, firstRequest);
 
     /* Splitting things apart - need to save state */
-    char strtokState[MAXLINE];
-    char * httpMethod;
+    char strtokState[MAXLINE]={0};
+    char * httpMethod=NULL;
     httpMethod = strtok_r(buf1, " ", &strtokState);
 
     if (httpMethod == NULL) {
@@ -569,21 +578,10 @@ void *webTalk(void *args) {
     return NULL;
 }
 
-/*[liuzhuan] */
-void SSLTerminal(SSL *ssl) 
-{
-	SSL_CTX *ctx = SSL_get_SSL_CTX(ssl);
-	SSL_shutdown(ssl);
-	SSL_free(ssl);
-	if (ctx) {
-		SSL_CTX_free(ctx);
-	}
-}
 
 /* this function handles the two-way encrypted data transferred in
    an HTTPS connection */
-
-void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int serverPort) 
+void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int serverPort)
 {
     int serverfd = 0, numBytes1 = 0, numBytes2 = 0;
     int tries = 0;
@@ -609,19 +607,17 @@ void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int ser
     Rio_readinitb(&server, serverfd);
 
     /* let the client know we've connected to the server */
-    //sprintf(buf1, "%s 200 OK\r\n\r\n", version);
 	/* 回复客户端代理协议 200, 表示ok */
     sprintf(buf1, "%s 200 Connection Established\r\n\r\n", version);
     Rio_writen(clientfd, buf1, strlen(buf1));
 
     /*[liuzhuan] 加SSL流程 */
-    printf("------------- Line num %d -------------\n", __LINE__);
     int ret;
     struct ppSSL PSL;
     SSL_library_init();
     SSL_load_error_strings();
 
-    /* [liuzhuan] 从对端方向(server socket direction) 建立假证书 */
+    /* [liuzhuan] 从对端方向(server socket direction) 使用对方host name建立证书 */
     SSL_CTX * ctx_server;
     ctx_server = SSL_CTX_new(TLSv1_2_client_method());
     PSL.ssl_server = SSL_new(ctx_server);
@@ -659,6 +655,20 @@ void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int ser
 	PSL.clientfd = clientfd;
 	PSL.serverfd = serverfd;
 
+	/*
+	[liuzhuan]
+	forwarder函数有两个版本, 
+	 1: select io模式, 触发select事件后, 进行ssl io, 此时, 这是一个ssl tune隧道模式
+	 2: 普通io read/write 转发模式, 此时, 这是一个普通的不带有ssl的web tune隧道模式
+	ssl 中间人劫持需要选用1
+	web 隧道需要选用2
+
+	[liuzhuan]
+	ToDo::
+	在这里需要判断rsa黑白名单, 白名单走forwarder_io函数, 并create thread它
+	白名单外, 走forwarder函数, 也需要create threat它
+	*/
+
 	/* [liuzhuan] 建立server-->client线程, forwarder() */
     Pthread_create(&tid, NULL, forwarder, (void*)&PSL);
 
@@ -687,11 +697,11 @@ void secureTalk(int clientfd, rio_t client, char *inHost, char *version, int ser
     X509_free(fake_x509);
 }
 
-/* SSL通道版本->select IO (ssl read ret code mode)模式 */
+/* SSL通道版本 forwarder -> select IO 模式 */
 void * forwarder(void * args) 
 {
     fd_set readfds;
-    char buf1[MAXLINE * 2] = {0};
+    char buf1[MAXLINE*2] = {0};
     struct ppSSL * PSL = (struct ppSSL *)args;
     int numBytes = 0;
     int byteCount = 0;
@@ -701,6 +711,8 @@ void * forwarder(void * args)
 
     while(1)
     {
+		memset(buf1, 0, MAXLINE*2);
+
         FD_ZERO(&readfds);
         FD_SET(PSL->serverfd, &readfds);
         if( select(FD_SETSIZE, &readfds, NULL, NULL, NULL) == 0  )
@@ -710,7 +722,7 @@ void * forwarder(void * args)
 
         if( FD_ISSET(PSL->serverfd, &readfds) )
         {
-            numBytes = SSL_read(PSL->ssl_server, buf1, MAXLINE * 2);
+            numBytes = SSL_read(PSL->ssl_server, buf1, MAXLINE*2);
             
             code = numBytes;
             error = SSL_get_error(PSL->ssl_server, code);
@@ -724,6 +736,7 @@ void * forwarder(void * args)
 	        if (numBytes != byteCount) 
             {
     			fprintf(stderr, "Did not send correct number of bytes to client.\n");
+				break;
 	        }
         }
     }
@@ -731,102 +744,20 @@ void * forwarder(void * args)
     return NULL;
 }
 
-/* SSL通道版本->select IO模式 */
+/* IO通道版本 forwarder --> 普通 read/write IO 模式 */
 /*
-void * forwarder(void * args) 
+void * forwarder_io(void * args)
 {
-    fd_set readfds;
-    char buf1[MAXLINE] = {0};
-    struct ppSSL * PSL = (struct ppSSL *)args;
-    int numBytes = 0;
+    int numBytes=0, lineNum=0, serverfd=0, clientfd=0;
     int byteCount = 0;
-    
-    int wflag = 1;
-
-    while(wflag)
-    {
-        FD_ZERO(&readfds);
-        FD_SET(PSL->serverfd, &readfds);
-        if( select(FD_SETSIZE, &readfds, NULL, NULL, NULL) == 0  )
-        {
-            continue;
-        }
-
-        if( FD_ISSET(PSL->serverfd, &readfds) )
-        {
-            do
-            {
-                numBytes = SSL_read(PSL->ssl_server, buf1, MAXLINE);
-                if (numBytes <= 0) 
-                {
-                    fprintf(stderr, "Did not recv correct number of bytes to server.\n");
-                    wflag = 0;
-        			break;
-        		}
-                byteCount = SSL_write(PSL->ssl_client, buf1, numBytes);
-		        if (numBytes != byteCount) 
-                {
-        			fprintf(stderr, "Did not send correct number of bytes to client.\n");
-                    wflag = 0;
-		        	break;
-		        }
-                                
-            } while ( SSL_pending(PSL->ssl_server) );
-        }
-    }
-
-    return NULL;
-}
-*/
-
-
-/* SSL通道版本->普通 SSL IO 模式 */
-/*
-void * forwarder(void * args) 
-{
-    int numBytes = 0;
-    int lineNum = 0;
-    int byteCount = 0;
-    char buf1[MAXLINE] = {0};
-
+    char buf1[MAXLINE * 2] = {0};
     struct ppSSL * PSL = (struct ppSSL *)args;
 
 	while (1) 
     {
-        memset(buf1, 0, MAXLINE);
+        memset(buf1, 0, MAXLINE*2);
 
-		numBytes = SSL_read(PSL->ssl_server, buf1, MAXLINE);
-		if (numBytes <= 0) {
-			break;
-		}
-
-        numBytes = SSL_pending(PSL->ssl_server);
-
-		byteCount = SSL_write(PSL->ssl_client, buf1, numBytes);
-		if (numBytes != byteCount) {
-			fprintf(stderr, "Did not send correct number of bytes to client.\n");
-			break;
-		}
-	}
-
-	return NULL;
-}
-*/
-
-/* IO通道版本->普通 read/write IO 模式 */
-/*
-void * forwarder(void * args)
-{
-    int numBytes, lineNum, serverfd, clientfd;
-    int byteCount = 0;
-    char buf1[MAXLINE] = {0};
-    struct ppSSL * PSL = (struct ppSSL *)args;
-
-	while (1) 
-    {
-        memset(buf1, 0, MAXLINE);
-
-		numBytes = Rio_readp(PSL->serverfd, buf1, MAXLINE);
+		numBytes = Rio_readp(PSL->serverfd, buf1, MAXLINE*2);
 		if (numBytes <= 0) {
 			break;
 		}
